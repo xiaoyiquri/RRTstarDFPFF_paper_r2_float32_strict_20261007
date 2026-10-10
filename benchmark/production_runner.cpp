@@ -80,6 +80,14 @@ template<class Model> int productionRuns(const PaperDataAdapter& adapter,const Y
     fc.min_time=y["pff"]["min_time"].as<float>();fc.max_time=y["pff"]["max_time"].as<float>();
     fc.fixed_time=y["pff"]["fixed_time"].as<float>();fc.free_terminal_time=y["pff"]["free_terminal_time"].as<bool>();
     fc.additional_time_samples=y["pff"]["additional_time_samples"].as<std::size_t>(0);
+    const std::string time_policy=y["pff"]["time_policy"].as<std::string>("candidate_set");
+    if(time_policy=="optimal_only") {
+        fc.time_policy=production::FloatTimePolicy::OptimalOnly;
+        if(fc.additional_time_samples!=0)
+            throw std::invalid_argument("optimal_only requires additional_time_samples=0");
+    } else if(time_policy=="candidate_set") {
+        fc.time_policy=production::FloatTimePolicy::CandidateSet;
+    } else throw std::invalid_argument("Unknown PFF time_policy: "+time_policy);
     fc.defer_trajectories=y["pff"]["defer_trajectories"].as<bool>(true);
     if(!y["pff"]["free_terminal_state"].as<bool>())throw std::invalid_argument("Expansion retains free terminal velocity");
     typename Solver::Weight R=Solver::Weight::Zero();

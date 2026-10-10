@@ -92,9 +92,13 @@ def main():
     parser.add_argument("--cpu",type=int)
     parser.add_argument("--df-mode",choices=("paper_r2","full_df"),default="paper_r2")
     parser.add_argument("--numeric-profile",choices=("float32_production","legacy_mixed"))
-    parser.add_argument("--shortcut",choices=("true","false"),default="true")
+    parser.add_argument("--time-policy",choices=("candidate_set","optimal_only"),
+                        help="Production only; default optimal_only")
+    parser.add_argument("--additional-time-samples",type=int,
+                        help="Production only; default 0; optimal_only requires 0")
+    parser.add_argument("--shortcut",choices=("true","false"),default="false")
     parser.add_argument("--shortcut-mode",choices=("flask","cost_decreasing"),default="flask")
-    parser.add_argument("--shortcut-time",choices=("original_duration","optimal"),default="original_duration")
+    parser.add_argument("--shortcut-time",choices=("original_duration","optimal"),default="optimal")
     parser.add_argument("--cases",nargs="+",choices=list(CASES),default=list(CASES))
     args=parser.parse_args()
     if args.runs<1 or not 0<args.timeout<float("inf") or not 0<=args.seed<=4294967295-args.runs+1:
@@ -103,6 +107,13 @@ def main():
     numeric=args.numeric_profile or ("legacy_mixed" if args.df_mode=="full_df" else "float32_production")
     if args.df_mode=="full_df" and numeric=="float32_production":
         parser.error("full_df remains legacy_mixed; production float32 is paper_r2 only")
+    if numeric!="float32_production" and (args.time_policy is not None or args.additional_time_samples is not None):
+        parser.error("Time-policy overrides require float32_production")
+    time_policy=args.time_policy or "optimal_only"
+    additional=0 if args.additional_time_samples is None else args.additional_time_samples
+    if not 0<=additional<=128: parser.error("additional-time-samples must be in [0,128]")
+    if numeric=="float32_production" and time_policy=="optimal_only" and additional!=0:
+        parser.error("optimal_only requires additional_time_samples=0")
     source,build=args.dynobench_source.resolve(),args.build_dir.resolve()
     binary=build/("benchmark.exe" if sys.platform=="win32" else "benchmark")
     if not binary.is_file(): parser.error("Missing executable: "+str(binary))
@@ -121,6 +132,9 @@ def main():
     manifest=dict(validation_backend="simd_discrete_float8",geometry="sphere_union",
         profile="flask_strict" if numeric=="float32_production" else "paper_fair", numeric_profile=numeric,
         df_mode=args.df_mode,protocol=args.protocol,
+        rewire_before_first_solution=(args.protocol=="anytime") if numeric=="float32_production" else None,
+        pff_time_policy=time_policy if numeric=="float32_production" else "candidate_set",
+        pff_additional_time_samples=additional if numeric=="float32_production" else None,
         boundary_contract="reduced_flat_A_prime" if args.df_mode=="paper_r2" else "full_physical",
         solver_precision="float32" if numeric=="float32_production" else "float64",validation_precision="float32",
         time_root_precision="float32" if numeric=="float32_production" else "long_double",
@@ -132,7 +146,7 @@ def main():
         shortcut_mode=args.shortcut_mode,shortcut_time_mode=args.shortcut_time,
         project_fixed=dict(obstacle_sphere_cell=.1,robot_radius=dict(unicycle=.125,quad2d=.1,quad3d=.25),
             collision_margin=.00001,max_step=.005,rounding="radius_compensates_center_error_outward"),
-        inputs={},environment_files={},model_files={})
+        inputs={},environment_files={},model_files={},planner_settings={},config_presets={})
     summaries=[]
     print(f"{numeric}, {args.protocol}, affinity={affinity}; sampled SIMD validation",flush=True)
     if numeric=="legacy_mixed": print("Legacy comparison: shortcut unavailable and disabled",flush=True)
@@ -140,6 +154,7 @@ def main():
         env,model=CASES[case];root=project/"benchmark/config"
         if args.df_mode=="full_df": root/= "full_df"
         elif numeric=="legacy_mixed": root/= "legacy_mixed/paper_r2"
+        elif args.protocol=="anytime": root/= "anytime"
         original=root/(case+".yaml")
         model_file=(project/"benchmark/models/paper" if model in PAPER_MODELS else source/"models")/(model+".yaml")
         text=original.read_text(encoding="utf-8")
@@ -148,10 +163,15 @@ def main():
             "stop_at_first_solution":str(args.protocol=="latency").lower()}
         if model in PAPER_MODELS: replacements["model_file"]=json.dumps(model_file.resolve().as_posix())
         if numeric=="float32_production":
-            replacements.update(shortcut=args.shortcut,time_mode=args.shortcut_time)
+            replacements.update(shortcut=args.shortcut,time_mode=args.shortcut_time,
+                rewire_before_first_solution=str(args.protocol=="anytime").lower(),
+                time_policy=time_policy,additional_time_samples=str(additional))
             text=re.sub(r"(?m)(^postprocess:\n(?:  .*\n)*?  mode:).*$",r"\g<1> "+args.shortcut_mode,text)
         for key,value in replacements.items(): text=replace(text,key,value)
         config=output/(case+".yaml");config.write_text(text,encoding="utf-8")
+        manifest["config_presets"][case]=str(original)
+        manifest["planner_settings"][case]={key:re.search(r"(?m)^  "+key+r":\s*(.*)$",text).group(1)
+            for key in ("stop_at_first_solution","rewire_before_first_solution","timeout")}
         manifest["inputs"][case]={str(f):digest(f) for f in (original,source/"envs"/env,model_file,config)}
         manifest["environment_files"][case]=str(source/"envs"/env);manifest["model_files"][case]=str(model_file.resolve())
         (output/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")

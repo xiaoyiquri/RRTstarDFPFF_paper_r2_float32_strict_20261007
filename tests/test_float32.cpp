@@ -64,6 +64,15 @@ int main(){return runTest([]{
             const auto list=solver.candidates(x,c);
             require(std::any_of(list.begin(),list.end(),[&](auto v){return v.T==fc.min_time;}),"minimum time compared");
             require(std::any_of(list.begin(),list.end(),[&](auto v){return v.T==fc.max_time;}),"maximum time compared");
+            auto zero_samples=fc;zero_samples.additional_time_samples=0;
+            S candidate_solver(R,zero_samples);
+            auto optimal_config=zero_samples;optimal_config.time_policy=FloatTimePolicy::OptimalOnly;
+            S optimal_solver(R,optimal_config);
+            auto all=candidate_solver.candidates(x,c),one=optimal_solver.candidates(x,c);
+            require(all.size()>1&&one.size()==1,"zero samples still has candidates; optimal_only returns one");
+            close(one[0].T,all[0].T,0,"optimal-only chooses best constrained time");
+            close(one[0].cost,all[0].cost,0,"optimal-only chooses best true boundary cost");
+            require(optimal_solver.materialize(x,one[0]),"optimal deferred cubic materializes");
         }
         if(i<8){starts[i]=x;targets[i]=i%2?S::Constraint::full(xf):S::Constraint::output(xf.output());}
     }
@@ -73,6 +82,13 @@ int main(){return runTest([]{
         require(lanes==7,"mixed boundaries and partial AVX batch");
         for(int i=0;i<7;++i){auto scalar=solver.candidates(starts[i],targets[i]);
             close(simd[i].front().cost,scalar.front().cost,5e-5,"AVX float cost ranking parity");}
+        auto optimal_config=fc;optimal_config.additional_time_samples=0;
+        optimal_config.time_policy=FloatTimePolicy::OptimalOnly;
+        S optimal_solver(R,optimal_config);R2FloatBatch<2> optimal_batch(optimal_solver);
+        auto optimal_simd=optimal_batch.candidatesBatch(starts,targets,7,true,nullptr);
+        for(int i=0;i<7;++i){auto scalar=optimal_solver.candidates(starts[i],targets[i]);
+            require(optimal_simd[i].size()==1,"AVX optimal-only has no alternate validation duration");
+            close(optimal_simd[i][0].cost,scalar[0].cost,5e-5,"AVX optimal-only ranking parity");}
         float coordinates[26],query[2]{.7f,.3f},weights[2]{1.2f,.6f},periods[2]{0,0},a[13],b[13];
         for(int i=0;i<26;++i)coordinates[i]=float(i)*.1f;
         distanceBatchFloat(coordinates,query,weights,periods,2,13,13,a,SIMDBackend::Scalar);
@@ -84,6 +100,18 @@ int main(){return runTest([]{
     require(std::any_of(roots.begin(),roots.end(),[](float x){return std::abs(x-.5f)<.001f;}),"multiple root retained");
     S::State zero;auto same=solver.solve(zero,S::Constraint::full(zero));
     close(same.T,fc.min_time,1e-6,"degenerate zero-energy selects lower bound");
+    auto only_config=fc;only_config.additional_time_samples=0;only_config.time_policy=FloatTimePolicy::OptimalOnly;
+    S only(R,only_config);auto lower=only.candidates(zero,S::Constraint::full(zero));
+    require(lower.size()==1&&lower[0].T==fc.min_time,"optimal-only retains lower-bound optimum");
+    S::State far;far.setDerivative(0,S::Output::Constant(100.f));
+    auto upper=only.candidates(zero,S::Constraint::full(far));
+    require(upper.size()==1&&upper[0].T==fc.max_time,"optimal-only retains upper-bound optimum");
+    only_config.free_terminal_time=false;
+    auto fixed=S(R,only_config).candidates(zero,S::Constraint::full(far));
+    require(fixed.size()==1&&fixed[0].T==fc.fixed_time,"fixed-time setting preserved");
+    bool invalid=false;only_config.additional_time_samples=1;
+    try{S rejected(R,only_config);}catch(const std::invalid_argument&){invalid=true;}
+    require(invalid,"optimal-only rejects extra uniform times");
     ShortcutModel::FlatTrajectory tr;tr.T=1;tr.normalized=true;
     tr.coefficients(0,1)=.3f;
     require(certifyUnicycleSpeed(tr,1e-6f)==SpeedCertificate::Valid,"constant nonzero velocity certified");

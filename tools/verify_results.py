@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from pathlib import Path
 
 def main():
@@ -15,6 +16,18 @@ def main():
     assert len(m["affinity"])==1 and m["external_checks"]==0
     checked=successes=0
     for case in m["cases"]:
+        if "pff_time_policy" in m:
+            config=(root/(case+".yaml")).read_text(encoding="utf-8")
+            def value(key):
+                found=re.search(r"(?m)^  "+re.escape(key)+r":\s*(.*)$",config)
+                assert found, "Missing generated configuration key: "+key
+                return found.group(1).strip()
+            assert value("stop_at_first_solution")==str(m["protocol"]=="latency").lower()
+            assert value("rewire_before_first_solution")==str(m["protocol"]=="anytime").lower()
+            assert value("time_policy")==m["pff_time_policy"]
+            assert int(value("additional_time_samples"))==m["pff_additional_time_samples"]
+            if m["pff_time_policy"]=="optimal_only": assert m["pff_additional_time_samples"]==0
+            assert value("shortcut")==str(m["shortcut_enabled"]).lower()
         with (root/case/"results.csv").open(newline="",encoding="utf-8") as f: rows=list(csv.DictReader(f))
         assert len(rows)==m["runs"]
         for r in rows:
@@ -23,6 +36,7 @@ def main():
             assert r["numeric_profile"]=="float32_production" and r["solver_precision"]==r["time_root_precision"]=="float32"
             assert r["boundary_contract"]=="reduced_flat_A_prime" and r["pseudo_control_order"]=="2"
             assert r["dynobench_validations"]=="0" and r["validation_backend"]=="simd_discrete_float8"
+            assert (r["shortcut_enabled"]=="1")==m["shortcut_enabled"]
             search,shortcut,total=map(float,(r["search_time"],r["shortcut_time"],r["total_time"]))
             assert math.isclose(total,search+shortcut,rel_tol=1e-12,abs_tol=1e-12)
             assert float(r["final_validation_time"])>=0 and float(r["export_time"])>=0

@@ -26,6 +26,8 @@
   "core/rewiring.h",
   "core/rrtstar.h",
   "core/sampler.h",
+  "docs/change_manifest.json",
+  "docs/changed_existing_files.json",
   "docs/original_integrity_check.json",
   "dynobench/data_adapter.cpp",
   "plot_successful_results_paper.py",

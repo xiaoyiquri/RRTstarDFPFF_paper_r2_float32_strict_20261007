@@ -1,4 +1,4 @@
-# paper_r2 float32 strict 实施说明（2026-10-07）
+# paper_r2 float32 strict 实施说明（2026-10-07；2026-10-09 更新）
 
 本次从 `RRTstarDFPFF_paper_r2_noguidance_20261006` 另建
 `RRTstarDFPFF_paper_r2_float32_strict_20261007`，只修改新副本。
@@ -53,7 +53,11 @@ C=4(<v0,v0>+<v0,vf>+<vf,vf>)
 
 两者的时间驻点均满足 `T⁴-C*T²-2B*T-3A=0`，但 A/B/C 不同。
 实现先用 `u=T/max_time` 缩放，以导数递归划分单调区间，再用 float 二分隔离根；包含近似重根候选。
-比较区间内根、min/max 边界以及原有 12 个额外候选时间的真实闭式 J，按代价排序。
+比较区间内根和 min/max 边界的真实闭式 J，按代价排序。
+2026-10-09 新增 `FloatTimePolicy`：默认六个 strict 配置使用 `optimal_only`，只返回排序第一项，
+DF/碰撞检查失败后不尝试第二时长。上下界仍参与约束时间区间内的最优选择。
+`candidate_set` 保留全部排序候选，可配额外均匀采样作为消融；`optimal_only` 必须配 `additional_time_samples=0`。
+未设置 time_policy 的旧 YAML 和直接构造 FloatPFFConfig 均默认 candidate_set，保留兼容性。
 不使用 Ferrari 公式作为唯一求根方法，不回退到 double。浮点根的精度有限，不能把数值驻点声称为精确代数根。
 
 归一化导数乘 `T^-d`。r=2 的 pseudo-control 为加速度，真实 cubic jerk 被保留，snap 为零。
@@ -111,11 +115,14 @@ latency 首次建立 goal 后立即保存 first path 和 J_first，退出循环�
 anytime 保存首解快照后继续，记录 incumbent cost 变化事件。
 
 ```
-latency: 20 seeds (41..60), stop_at_first_solution=true, 120 s 失败保护
-anytime: 20 seeds (41..60), stop_at_first_solution=false, 每 seed 120 s
+latency: 20 seeds (41..60), stop_at_first_solution=true, rewire_before_first_solution=false, 120 s 失败保护
+anytime: 20 seeds (41..60), stop_at_first_solution=false, rewire_before_first_solution=true, 每 seed 120 s
 ```
 
 `tools/run_six.py` 固定并核验单 CPU affinity，子进程继承；设置常用数值库线程数为 1。
+主目录为 latency preset，anytime 子目录为独立 preset；相对模型/数据路径均指向原文件。
+协议之间只改两项 planner 开关，默认 shortcut 均关闭；manifest 增加时间策略、额外采样数、
+首解前 rewiring、实际 preset 路径及各场景 planner 开关。不要直接比较两组 search_time。
 正式 20/120/41 预算要求 CMakeCache 中的 Release 构建。manifest 保存 binary、配置、环境、模型、几何 SHA256、
 compiler/flags/platform/CPU/affinity、所有 seeds 和项目固定参数。
 
@@ -133,13 +140,13 @@ Wall-clock 在一个局部检查结束后才再次检查 timeout，因此可能�
 
 ```
 postprocess:
-  shortcut: true
+  shortcut: false        # 首解性能排查默认关闭；独立开启时改为 true
   mode: flask             # 或 cost_decreasing
-  time_mode: original_duration  # 或 optimal
+  time_mode: optimal      # 或 original_duration
 ```
 
 按前端 path node 和后端远节点尝试连接；使用 fixed-terminal PFF + 同一个 DF/float8 validator。
-original_duration 用替换段累计 T；optimal 用原 free-time 候选集合。
+original_duration 用替换段累计 T；optimal 服从 PFF 的 time_policy（主模式只尝试 T*）。
 flask 只要求有效；cost_decreasing 还要求 J 严格降低（含 float 容差）。
 shortcut 只改路径副本，不改树。最终复检失败会退回 raw 并记录 shortcut_fallback。
 

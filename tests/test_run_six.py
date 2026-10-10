@@ -27,6 +27,7 @@ class RunnerPaths(unittest.TestCase):
             paper_models.mkdir(parents=True)
             configs.mkdir(parents=True)
             (configs / "full_df").mkdir()
+            (configs / "anytime").mkdir()
             (configs / "legacy_mixed/paper_r2").mkdir(parents=True)
             for name, (env, model) in runner.CASES.items():
                 env_file = source / "envs" / env
@@ -37,6 +38,8 @@ class RunnerPaths(unittest.TestCase):
                     (paper_models / (model + ".yaml")).write_text("fixture\n")
                 (configs / (name + ".yaml")).write_text(
                     (PROJECT / "benchmark/config" / (name + ".yaml")).read_text())
+                (configs / "anytime" / (name + ".yaml")).write_text(
+                    (PROJECT / "benchmark/config/anytime" / (name + ".yaml")).read_text())
                 (configs / "full_df" / (name + ".yaml")).write_text(
                     (PROJECT / "benchmark/config/full_df" / (name + ".yaml")).read_text())
                 (configs / "legacy_mixed/paper_r2" / (name + ".yaml")).write_text(
@@ -67,6 +70,15 @@ class RunnerPaths(unittest.TestCase):
                                 .resolve().as_posix()),
                             config)
                     self.assertIn('  stop_at_first_solution: ' + str('anytime' not in options).lower(), config)
+                    production='--df-mode' not in options and 'legacy_mixed' not in options
+                    if production:
+                        self.assertIn('  rewire_before_first_solution: '+str('anytime' in options).lower(),config)
+                        policy=options[options.index('--time-policy')+1] if '--time-policy' in options else 'optimal_only'
+                        extra=options[options.index('--additional-time-samples')+1] if '--additional-time-samples' in options else '0'
+                        shortcut=options[options.index('--shortcut')+1] if '--shortcut' in options else 'false'
+                        self.assertIn('  time_policy: '+policy,config)
+                        self.assertIn('  additional_time_samples: '+extra,config)
+                        self.assertIn('  shortcut: '+shortcut,config)
                     case_dir = output / case
                     case_dir.mkdir()
                     (case_dir / "results.csv").write_text(
@@ -89,6 +101,14 @@ class RunnerPaths(unittest.TestCase):
             self.assertEqual(manifest["seeds"],[41])
             self.assertEqual(manifest["project_fixed"]["max_step"],.005)
             self.assertEqual(manifest["protocol"],"anytime" if "anytime" in options else "latency")
+            if '--df-mode' not in options and 'legacy_mixed' not in options:
+                self.assertEqual(manifest['rewire_before_first_solution'],'anytime' in options)
+                self.assertEqual(manifest['pff_time_policy'],options[options.index('--time-policy')+1] if '--time-policy' in options else 'optimal_only')
+                self.assertEqual(manifest['pff_additional_time_samples'],int(options[options.index('--additional-time-samples')+1]) if '--additional-time-samples' in options else 0)
+                self.assertEqual(manifest['shortcut_enabled'],'--shortcut' in options and options[options.index('--shortcut')+1]=='true')
+                for case,preset in manifest['config_presets'].items():
+                    self.assertEqual(pathlib.Path(preset).parent,configs/'anytime' if 'anytime' in options else configs)
+                    self.assertEqual(manifest['planner_settings'][case]['rewire_before_first_solution'],str('anytime' in options).lower())
             self.assertTrue((source / "models").exists())
 
     def test_default_profile_paths(self):
@@ -105,6 +125,27 @@ class RunnerPaths(unittest.TestCase):
 
     def test_legacy_r2(self):
         self.exercise(["--numeric-profile", "legacy_mixed"])
+
+    def test_candidate_set_without_uniform_times(self):
+        self.exercise(['--time-policy','candidate_set','--additional-time-samples','0'])
+
+    def test_original_candidate_set_ablation(self):
+        self.exercise(['--time-policy','candidate_set','--additional-time-samples','12'])
+
+    def test_optional_flask_shortcut(self):
+        self.exercise(['--shortcut','true','--shortcut-mode','flask','--shortcut-time','optimal'])
+
+    def test_invalid_time_overrides(self):
+        for options in (['--time-policy','optimal_only','--additional-time-samples','12'],
+                        ['--additional-time-samples','-1'],['--additional-time-samples','129'],
+                        ['--numeric-profile','legacy_mixed','--time-policy','optimal_only'],
+                        ['--df-mode','full_df','--additional-time-samples','0']):
+            argv=['run_six','--dynobench-source','unused',*options]
+            with self.subTest(options=options),patch.object(sys,'argv',argv),\
+                    patch.object(runner,'execute') as execute,contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error: runner.main()
+                self.assertEqual(error.exception.code,2)
+                execute.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -8,10 +8,12 @@
 #include <limits>
 #include <cmath>
 namespace rrtpff::production {
+enum class FloatTimePolicy { CandidateSet, OptimalOnly };
 struct FloatPFFConfig {
     float min_time{.001f}, max_time{5.f}, fixed_time{1.f};
     bool free_terminal_time{true}, defer_trajectories{true};
     std::size_t additional_time_samples{};
+    FloatTimePolicy time_policy{FloatTimePolicy::CandidateSet};
 };
 // Degree <= 4 root isolation: derivative roots split monotone intervals.
 // No Ferrari-only formula, dynamic matrices, long double or double fallback.
@@ -96,6 +98,8 @@ public:
            !(config.min_time>0.f)||!std::isfinite(config.max_time)||config.max_time<config.min_time ||
            !(config.fixed_time>0.f)||!std::isfinite(config.fixed_time)||config.additional_time_samples>128)
             throw std::invalid_argument("Invalid r2 float PFF parameters");
+        if(config.time_policy==FloatTimePolicy::OptimalOnly && config.additional_time_samples!=0)
+            throw std::invalid_argument("optimal_only requires additional_time_samples=0");
     }
     const Weight& weight()const{return R_;}
     const FloatPFFConfig& config()const{return config_;}
@@ -165,6 +169,8 @@ public:
         std::stable_sort(out.begin(),out.end(),[](const auto& a,const auto& b) {
             return a.cost==b.cost?a.T<b.T:a.cost<b.cost;
         });
+        // Roots and bounds select T*; validation receives only that duration.
+        if(config_.time_policy==FloatTimePolicy::OptimalOnly && out.size()>1) out.resize(1);
         return out;
     }
     std::vector<Result> candidates(const State& x,const Constraint& c)const {

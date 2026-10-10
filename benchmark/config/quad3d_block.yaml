@@ -2,7 +2,7 @@ profile: flask_strict
 numeric: {profile: float32_production}
 df:
   mode: paper_r2
-# Paper VII-A dynamics profile; RRT* search settings retained, not a FLASK reproduction.
+# Latency preset: first solution, no pre-first rewiring, r2 float32 T*-only.
 system: quad3d
 environment: block
 dynobench:
@@ -30,6 +30,8 @@ planner:
   rewire_before_first_solution: false
   explicit_goal_connection: true
   goal_parent_limit: 16
+  cache_goal_connections: true
+  minimum_parent_candidates: 8
   terminal_velocity_hint: false
 pff:
   R_diagonal: [1, 1, 1, 1]
@@ -38,7 +40,8 @@ pff:
   min_time: 0.1
   max_time: 6.0
   fixed_time: 2.0
-  additional_time_samples: 12
+  time_policy: optimal_only
+  additional_time_samples: 0
   defer_trajectories: true
 simd:
   pff: true
@@ -57,6 +60,6 @@ benchmark:
   output_directory: ../../results/float32_quad3d_block
 
 postprocess:
-  shortcut: true
+  shortcut: false
   mode: flask
-  time_mode: original_duration
+  time_mode: optimal
